@@ -537,6 +537,11 @@ llama_expert_gating_func_type gating_op,
     return moe_out;
 }
 
+static float get_f32_2d(struct ggml_tensor * tensor, int64_t i0, int64_t i1) {
+    float * ptr = (float *) ((char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1]);
+    return *ptr;
+}
+
 static struct ggml_tensor * llm_build_kqv(
         struct ggml_context * ctx,
        struct llama_context & lctx,
@@ -1615,6 +1620,19 @@ struct llm_build_context {
 
             // input for next layer
             inpL = cur;
+
+            // This would be a good place to add debug code:
+            if (il == 50) {
+                if (inpL->ne[1] > 1) {
+                    printf("Dumping residual stream: elements=%zu, dims=%d x %d\n",
+                        ggml_nelements(inpL), (int)inpL->ne[0], (int)inpL->ne[1]);
+
+                    struct ggml_tensor* cpu_tensor = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, inpL->ne[0], inpL->ne[1]);
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, inpL, cpu_tensor));
+
+                    lctx.debug_tensor_to_dump = cpu_tensor;
+                }
+            }
         }
 
         cur = inpL;
@@ -8684,6 +8702,19 @@ static int llama_decode_impl(
                 default:
                     return -3;
             }
+        }
+
+        // After llama_graph_compute():
+        if (lctx.debug_tensor_to_dump != nullptr) {
+            FILE* f = fopen("activation.bin", "wb");
+            if (f != nullptr) {
+                fwrite(lctx.debug_tensor_to_dump->data,
+                    sizeof(float),
+                    ggml_nelements(lctx.debug_tensor_to_dump),
+                    f);
+                fclose(f);
+            }
+            lctx.debug_tensor_to_dump = nullptr;  // Clear for next iteration
         }
 
         // update the kv ring buffer
